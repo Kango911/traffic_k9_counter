@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QSizePolicy
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
 
 # Для экспорта в Excel
 try:
@@ -45,12 +45,25 @@ def get_ordered_exits(entry):
     elif entry == "W": return ["N", "E", "S", "W"]
     else: return []
 
+def create_k9_icon():
+    # Увеличим размер, добавим рамку для чёткости
+    pixmap = QPixmap(128, 128)
+    pixmap.fill(QColor(131, 99, 157))  # синий фон
+    painter = QPainter(pixmap)
+    painter.setPen(QColor(255, 255, 255))
+    font = QFont("Arial", 48, QFont.Bold)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignCenter, "K9")
+    painter.end()
+    return QIcon(pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
 class DirectionSelectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Выбор направлений перекрёстка")
         self.setModal(True)
         self.setMinimumWidth(500)
+        self.setWindowIcon(create_k9_icon())
 
         layout = QVBoxLayout(self)
 
@@ -100,6 +113,12 @@ class DirectionSelectionDialog(QDialog):
         btn_layout.addWidget(btn_none_exits)
         layout.addLayout(btn_layout)
 
+        # Контактная информация
+        contact_label = QLabel("По вопросам обращаться к @Kango911")
+        contact_label.setAlignment(Qt.AlignCenter)
+        contact_label.setStyleSheet("color: #555; font-style: italic; margin-top: 10px;")
+        layout.addWidget(contact_label)
+
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
@@ -130,6 +149,7 @@ class TrafficCounterApp(QMainWindow):
 
         self.setWindowTitle("Счётчик транспортных средств на перекрёстке")
         self.setMinimumSize(800, 600)
+        self.setWindowIcon(create_k9_icon())
         self.counters = defaultdict(int)
         self.buttons = {}
 
@@ -141,12 +161,12 @@ class TrafficCounterApp(QMainWindow):
         top_layout = QHBoxLayout()
         self.cross_name_edit = QLineEdit()
         self.cross_name_edit.setPlaceholderText("Название перекрёстка")
-        self.cross_name_edit.setText("Перекрёсток ул. Ленина - ул. Советская")
+        self.cross_name_edit.setText("Перекрёсток ул. Академика Макеева - ул. 250-летия Челябинска")
         top_layout.addWidget(QLabel("Перекрёсток:"))
         top_layout.addWidget(self.cross_name_edit)
 
         self.date_edit = QLineEdit()
-        self.date_edit.setPlaceholderText("Дата записи камеры")
+        self.date_edit.setPlaceholderText("Дата записи с камеры")
         self.date_edit.setText(datetime.now().strftime("%Y-%m-%d %H:%M"))
         top_layout.addWidget(QLabel("Дата записи:"))
         top_layout.addWidget(self.date_edit)
@@ -229,7 +249,7 @@ class TrafficCounterApp(QMainWindow):
 
         scroll.setWidget(self.table_widget)
         main_layout.addWidget(scroll)
-        self.statusBar().showMessage("Левая кнопка +1, правая -1 | Окно можно менять размер")
+        self.statusBar().showMessage("Левая кнопка +1, правая -1 | by Kango911")
 
     def increment_counter(self, direction, vtype):
         key = (direction, vtype)
@@ -369,6 +389,8 @@ class TrafficCounterApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    app.setWindowIcon(create_k9_icon())  # иконка для всех окон
+
     dialog = DirectionSelectionDialog()
     if dialog.exec() != QDialog.Accepted:
         sys.exit(0)
@@ -378,6 +400,7 @@ def main():
         sys.exit(1)
     window = TrafficCounterApp(entries, exits)
     window.show()
+    window.setWindowIcon(create_k9_icon())
     sys.exit(app.exec())
 
 if __name__ == "__main__":
