@@ -48,7 +48,7 @@ def get_ordered_exits(entry):
 def create_k9_icon():
     # Увеличим размер, добавим рамку для чёткости
     pixmap = QPixmap(128, 128)
-    pixmap.fill(QColor(131, 99, 157))  # синий фон
+    pixmap.fill(QColor(131, 99, 157))  # фиолетовый фон
     painter = QPainter(pixmap)
     painter.setPen(QColor(255, 255, 255))
     font = QFont("Arial", 48, QFont.Bold)
