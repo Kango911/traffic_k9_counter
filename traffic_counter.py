@@ -1,4 +1,6 @@
 import sys
+import json
+import os
 from datetime import datetime
 from collections import defaultdict
 
@@ -6,12 +8,13 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea,
     QMessageBox, QFileDialog, QToolTip, QDialog, QCheckBox, QDialogButtonBox,
-    QSizePolicy
+    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog,
+    QLineEdit, QTextEdit
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
 
-# Для экспорта в Excel
+# Экспорт в Excel
 try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, Border, Side
@@ -19,24 +22,10 @@ try:
 except ImportError:
     OPENPYXL_AVAILABLE = False
 
-# ----- КОНФИГУРАЦИЯ -----
+# ------------------------------------------------------------
+# Конфигурация направлений
 ALL_DIRECTIONS = ["N", "S", "E", "W"]
 DIRECTION_NAMES = {"N": "Север (N)", "S": "Юг (S)", "E": "Восток (E)", "W": "Запад (W)"}
-
-VEHICLE_TYPES = {
-    "car":        {"label": "Легковой",          "desc": "Легковые автомобили всех типов, включая седаны, хэтчбеки, универсалы."},
-    "mini_bus":   {"label": "Микроавтобус",      "desc": "Маршрутное такси, пассажирские микроавтобусы (Газель, Ford Transit малый). В том числе скорая помощь."},
-    "middle_bus": {"label": "Средний автобус",   "desc": "Средние автобусы (ПАЗ, ЛИАЗ малый, городские автобусы средней вместимости)."},
-    "bus":        {"label": "Большой автобус",   "desc": "Большие автобусы (ЛиАЗ, МАЗ, Mercedes Citaro и аналоги)."},
-    "mini_truck": {"label": "Малый грузовик",    "desc": "Небольшие грузовики грузоподъёмностью до 2 тонн (Газель, УАЗ с кузовом, японские/китайские аналоги)."},
-    "middle_truck":{"label": "Средний грузовик", "desc": "Грузовики грузоподъёмностью 2–6 тонн, 2 оси (ГАЗ, ЗИЛ, «Газон NEXT»)."},
-    "truck":      {"label": "Тяжёлый грузовик",  "desc": "Грузовики грузоподъёмностью более 6 тонн, 3 и более осей (КАМАЗ, МАЗ, Volvo, MAN)."},
-    "road_train": {"label": "Автопоезд",         "desc": "Грузовик с прицепом/полуприцепом, 4 и более осей."},
-    "trol":       {"label": "Троллейбус",        "desc": "Троллейбус с рогами, контактной сетью."},
-    "tram":       {"label": "Трамвай",           "desc": "Трамвай – состав, двигающийся по рельсам."}
-}
-
-PUBLIC_TRANSPORT = {"mini_bus", "middle_bus", "bus", "trol", "tram"}
 
 def get_ordered_exits(entry):
     if entry == "N": return ["E", "S", "W", "N"]
@@ -45,187 +34,323 @@ def get_ordered_exits(entry):
     elif entry == "W": return ["N", "E", "S", "W"]
     else: return []
 
-def create_k9_icon():
-    # Увеличим размер, добавим рамку для чёткости
-    pixmap = QPixmap(128, 128)
-    pixmap.fill(QColor(131, 99, 157))  # фиолетовый фон
-    painter = QPainter(pixmap)
-    painter.setPen(QColor(255, 255, 255))
-    font = QFont("Arial", 48, QFont.Bold)
-    painter.setFont(font)
-    painter.drawText(pixmap.rect(), Qt.AlignCenter, "K9")
-    painter.end()
-    return QIcon(pixmap.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+# ------------------------------------------------------------
+# Класс для хранения типа ТС
+class VehicleType:
+    def __init__(self, name, description="", is_public=False):
+        self.name = name
+        self.description = description
+        self.is_public = is_public
 
+    def to_dict(self):
+        return {"name": self.name, "description": self.description, "is_public": self.is_public}
+
+    @staticmethod
+    def from_dict(data):
+        return VehicleType(data["name"], data.get("description", ""), data.get("is_public", False))
+
+# ------------------------------------------------------------
+# Диалог выбора направлений (первое окно)
 class DirectionSelectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Выбор направлений перекрёстка")
         self.setModal(True)
         self.setMinimumWidth(500)
-        self.setWindowIcon(create_k9_icon())
-
         layout = QVBoxLayout(self)
 
-        info_label = QLabel("Выберите, откуда могут въезжать машины (въезды) и куда они могут поворачивать (выезды).\n"
-                            "Будут созданы все возможные комбинации въезд → выезд.")
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+        info = QLabel("Выберите въезды (откуда) и выезды (куда). Будут созданы все комбинации.")
+        info.setWordWrap(True)
+        layout.addWidget(info)
 
+        # Въезды
         entry_group = QGroupBox("Въезды (откуда едут)")
         entry_layout = QHBoxLayout(entry_group)
-        self.entry_checkboxes = {}
+        self.entry_cbs = {}
         for d in ALL_DIRECTIONS:
             cb = QCheckBox(DIRECTION_NAMES[d])
             cb.setChecked(True)
-            self.entry_checkboxes[d] = cb
+            self.entry_cbs[d] = cb
             entry_layout.addWidget(cb)
         layout.addWidget(entry_group)
 
+        # Выезды
         exit_group = QGroupBox("Выезды (куда могут направляться)")
         exit_layout = QHBoxLayout(exit_group)
-        self.exit_checkboxes = {}
+        self.exit_cbs = {}
         for d in ALL_DIRECTIONS:
             cb = QCheckBox(DIRECTION_NAMES[d])
             cb.setChecked(True)
-            self.exit_checkboxes[d] = cb
+            self.exit_cbs[d] = cb
             exit_layout.addWidget(cb)
         layout.addWidget(exit_group)
 
+        # Кнопки быстрого выбора
         btn_layout = QHBoxLayout()
-        def select_all_entries(checked):
-            for cb in self.entry_checkboxes.values(): cb.setChecked(checked)
-        def select_all_exits(checked):
-            for cb in self.exit_checkboxes.values(): cb.setChecked(checked)
-
-        btn_all_entries = QPushButton("Въезды: все")
-        btn_all_entries.clicked.connect(lambda: select_all_entries(True))
-        btn_none_entries = QPushButton("Въезды: снять все")
-        btn_none_entries.clicked.connect(lambda: select_all_entries(False))
-        btn_all_exits = QPushButton("Выезды: все")
-        btn_all_exits.clicked.connect(lambda: select_all_exits(True))
-        btn_none_exits = QPushButton("Выезды: снять все")
-        btn_none_exits.clicked.connect(lambda: select_all_exits(False))
-
-        btn_layout.addWidget(btn_all_entries)
-        btn_layout.addWidget(btn_none_entries)
-        btn_layout.addWidget(btn_all_exits)
-        btn_layout.addWidget(btn_none_exits)
+        def all_entries(checked): [cb.setChecked(checked) for cb in self.entry_cbs.values()]
+        def all_exits(checked): [cb.setChecked(checked) for cb in self.exit_cbs.values()]
+        btn_layout.addWidget(QPushButton("Въезды: все", clicked=lambda: all_entries(True)))
+        btn_layout.addWidget(QPushButton("Въезды: нет", clicked=lambda: all_entries(False)))
+        btn_layout.addWidget(QPushButton("Выезды: все", clicked=lambda: all_exits(True)))
+        btn_layout.addWidget(QPushButton("Выезды: нет", clicked=lambda: all_exits(False)))
         layout.addLayout(btn_layout)
 
-        # Контактная информация
-        contact_label = QLabel("По вопросам обращаться к @Kango911")
-        contact_label.setAlignment(Qt.AlignCenter)
-        contact_label.setStyleSheet("color: #555; font-style: italic; margin-top: 10px;")
-        layout.addWidget(contact_label)
+        # Контакт
+        contact = QLabel("По вопросам обращаться к @Kango911")
+        contact.setAlignment(Qt.AlignCenter)
+        contact.setStyleSheet("color: gray; font-style: italic;")
+        layout.addWidget(contact)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
-    def get_selected_directions(self):
-        entries = [d for d, cb in self.entry_checkboxes.items() if cb.isChecked()]
-        exits = [d for d, cb in self.exit_checkboxes.items() if cb.isChecked()]
+    def get_selected(self):
+        entries = [d for d, cb in self.entry_cbs.items() if cb.isChecked()]
+        exits = [d for d, cb in self.exit_cbs.items() if cb.isChecked()]
         return entries, exits
 
+# ------------------------------------------------------------
+# Диалог управления типами ТС (второе окно)
+class VehicleTypesDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Типы транспортных средств")
+        self.setModal(True)
+        self.resize(700, 500)
+
+        layout = QVBoxLayout(self)
+
+        # Таблица
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Название", "Описание", "Общественный"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        layout.addWidget(self.table)
+
+        # Кнопки управления
+        btn_layout = QHBoxLayout()
+        self.add_btn = QPushButton("Добавить")
+        self.edit_btn = QPushButton("Редактировать")
+        self.del_btn = QPushButton("Удалить")
+        self.load_btn = QPushButton("Загрузить из JSON")
+        self.save_btn = QPushButton("Сохранить в JSON")
+        btn_layout.addWidget(self.add_btn)
+        btn_layout.addWidget(self.edit_btn)
+        btn_layout.addWidget(self.del_btn)
+        btn_layout.addWidget(self.load_btn)
+        btn_layout.addWidget(self.save_btn)
+        layout.addLayout(btn_layout)
+
+        # Кнопки OK/Cancel
+        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        # Сигналы
+        self.add_btn.clicked.connect(self.add_type)
+        self.edit_btn.clicked.connect(self.edit_type)
+        self.del_btn.clicked.connect(self.del_type)
+        self.load_btn.clicked.connect(self.load_from_json)
+        self.save_btn.clicked.connect(self.save_to_json)
+
+        # Загружаем предустановленные типы
+        self.default_types = self.get_default_types()
+        self.vehicle_types = self.default_types[:]
+        self.refresh_table()
+
+    def get_default_types(self):
+        # Типы из задания (по файлу 1.Классы.docx)
+        return [
+            VehicleType("car", "Легковые автомобили", False),
+            VehicleType("mini_bus", "Микроавтобусы (газель, скорая)", True),
+            VehicleType("middle_bus", "Средние автобусы (ПАЗ)", True),
+            VehicleType("bus", "Большие автобусы (ЛиАЗ)", True),
+            VehicleType("mini_truck", "Малые грузовики (до 2 т)", False),
+            VehicleType("middle_truck", "Средние грузовики (2-6 т)", False),
+            VehicleType("truck", "Тяжёлые грузовики (>6 т)", False),
+            VehicleType("road_train", "Автопоезда", False),
+            VehicleType("trol", "Троллейбусы", True),
+            VehicleType("tram", "Трамваи", True)
+        ]
+
+    def refresh_table(self):
+        self.table.setRowCount(len(self.vehicle_types))
+        for i, vt in enumerate(self.vehicle_types):
+            self.table.setItem(i, 0, QTableWidgetItem(vt.name))
+            self.table.setItem(i, 1, QTableWidgetItem(vt.description))
+            chk = QCheckBox()
+            chk.setChecked(vt.is_public)
+            self.table.setCellWidget(i, 2, chk)
+        self.table.resizeRowsToContents()
+
+    def add_type(self):
+        name, ok = QInputDialog.getText(self, "Новый тип", "Название типа:")
+        if ok and name.strip():
+            desc, ok2 = QInputDialog.getText(self, "Описание", "Описание:", QLineEdit.Normal, "")
+            desc = desc if ok2 else ""
+            is_public = QMessageBox.question(self, "Общественный?", "Это общественный транспорт?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
+            self.vehicle_types.append(VehicleType(name.strip(), desc, is_public))
+            self.refresh_table()
+
+    def edit_type(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Ошибка", "Выберите тип для редактирования")
+            return
+        vt = self.vehicle_types[row]
+        name, ok = QInputDialog.getText(self, "Редактирование", "Название:", QLineEdit.Normal, vt.name)
+        if ok and name.strip():
+            desc, ok2 = QInputDialog.getText(self, "Описание", "Описание:", QLineEdit.Normal, vt.description)
+            desc = desc if ok2 else vt.description
+            is_public = QMessageBox.question(self, "Общественный?", "Это общественный транспорт?",
+                                             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes if vt.is_public else QMessageBox.No) == QMessageBox.Yes
+            vt.name = name.strip()
+            vt.description = desc
+            vt.is_public = is_public
+            self.refresh_table()
+
+    def del_type(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Ошибка", "Выберите тип для удаления")
+            return
+        if len(self.vehicle_types) == 1:
+            QMessageBox.warning(self, "Ошибка", "Нельзя удалить единственный тип")
+            return
+        reply = QMessageBox.question(self, "Удаление", f"Удалить тип '{self.vehicle_types[row].name}'?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            del self.vehicle_types[row]
+            self.refresh_table()
+
+    def save_to_json(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить типы", "vehicle_types.json", "JSON (*.json)")
+        if path:
+            data = [vt.to_dict() for vt in self.vehicle_types]
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            QMessageBox.information(self, "Сохранено", f"Сохранено в {path}")
+
+    def load_from_json(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Загрузить типы", "", "JSON (*.json)")
+        if path:
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self.vehicle_types = [VehicleType.from_dict(d) for d in data]
+                self.refresh_table()
+                QMessageBox.information(self, "Загружено", f"Загружено {len(self.vehicle_types)} типов")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", str(e))
+
+    def get_types(self):
+        # Считать флаги из чекбоксов
+        for i, vt in enumerate(self.vehicle_types):
+            chk = self.table.cellWidget(i, 2)
+            if chk:
+                vt.is_public = chk.isChecked()
+        return self.vehicle_types
+
+# ------------------------------------------------------------
+# Главное окно счётчика (третье окно)
 class TrafficCounterApp(QMainWindow):
-    def __init__(self, entries, exits):
+    def __init__(self, entries, exits, vehicle_types):
         super().__init__()
         self.entries = entries
         self.exits = exits
+        self.vehicle_types = vehicle_types   # список объектов VehicleType
+
+        # Генерация направлений
         self.directions = {}
         for entry in self.entries:
             ordered = get_ordered_exits(entry)
-            filtered = [ex for ex in ordered if ex in self.exits]
-            for ex in filtered:
-                code = entry + ex
-                display = f"{entry} → {ex}"
-                self.directions[code] = display
+            for ex in ordered:
+                if ex in self.exits:
+                    code = entry + ex
+                    self.directions[code] = f"{entry} → {ex}"
 
         if not self.directions:
-            QMessageBox.critical(self, "Ошибка", "Не выбрано ни одного направления. Приложение закроется.")
+            QMessageBox.critical(self, "Ошибка", "Нет направлений для выбранных въездов/выездов")
             sys.exit(1)
 
         self.setWindowTitle("Счётчик транспортных средств на перекрёстке")
         self.setMinimumSize(800, 600)
-        self.setWindowIcon(create_k9_icon())
-        self.counters = defaultdict(int)
+        self.setWindowIcon(self.create_k9_icon())
+
+        self.counters = defaultdict(int)   # ключ (direction_code, vehicle_type_name)
         self.buttons = {}
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
 
         # Верхняя панель
-        top_layout = QHBoxLayout()
-        self.cross_name_edit = QLineEdit()
-        self.cross_name_edit.setPlaceholderText("Название перекрёстка")
-        self.cross_name_edit.setText("Перекрёсток ул. Академика Макеева - ул. 250-летия Челябинска")
-        top_layout.addWidget(QLabel("Перекрёсток:"))
-        top_layout.addWidget(self.cross_name_edit)
+        top = QHBoxLayout()
+        self.cross_name = QLineEdit()
+        self.cross_name.setPlaceholderText("Название перекрёстка")
+        self.cross_name.setText("Перекрёсток ул. Ленина - ул. Советская")
+        top.addWidget(QLabel("Перекрёсток:"))
+        top.addWidget(self.cross_name)
 
         self.date_edit = QLineEdit()
-        self.date_edit.setPlaceholderText("Дата записи с камеры")
         self.date_edit.setText(datetime.now().strftime("%Y-%m-%d %H:%M"))
-        top_layout.addWidget(QLabel("Дата записи:"))
-        top_layout.addWidget(self.date_edit)
+        top.addWidget(QLabel("Дата записи:"))
+        top.addWidget(self.date_edit)
 
         self.export_btn = QPushButton("Экспорт в Excel")
         self.export_btn.clicked.connect(self.export_to_excel)
-        top_layout.addWidget(self.export_btn)
+        top.addWidget(self.export_btn)
 
-        main_layout.addLayout(top_layout)
+        main_layout.addLayout(top)
 
-        # Прокручиваемая область
+        # Прокручиваемая область с группами
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-
-        self.table_widget = QWidget()
-        self.table_layout = QVBoxLayout(self.table_widget)
-        self.table_layout.setContentsMargins(10, 10, 10, 10)
-        self.table_layout.setSpacing(15)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setSpacing(15)
 
         for entry in self.entries:
             group = QGroupBox(f"Направления из {DIRECTION_NAMES[entry]}")
-            group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             group_layout = QGridLayout(group)
             group_layout.setColumnStretch(0, 0)
 
-            headers = list(VEHICLE_TYPES.keys())
-            for col, vtype in enumerate(headers):
-                header_widget = QWidget()
-                header_layout = QHBoxLayout(header_widget)
-                header_layout.setContentsMargins(0, 0, 0, 0)
-                label = QLabel(VEHICLE_TYPES[vtype]["label"])
+            # Заголовки типов
+            for col, vt in enumerate(self.vehicle_types):
+                widget = QWidget()
+                h_layout = QHBoxLayout(widget)
+                h_layout.setContentsMargins(0,0,0,0)
+                label = QLabel(vt.name)
                 label.setWordWrap(True)
                 label.setAlignment(Qt.AlignCenter)
                 label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
                 info_btn = QPushButton("i")
-                info_btn.setFixedSize(22, 22)
-                info_btn.setToolTip(VEHICLE_TYPES[vtype]["desc"])
-                header_layout.addWidget(label, 1)
-                header_layout.addWidget(info_btn, 0)
-                group_layout.addWidget(header_widget, 0, col+1)
+                info_btn.setFixedSize(22,22)
+                info_btn.setToolTip(vt.description if vt.description else "Нет описания")
+                h_layout.addWidget(label, 1)
+                h_layout.addWidget(info_btn, 0)
+                group_layout.addWidget(widget, 0, col+1)
                 group_layout.setColumnStretch(col+1, 1)
 
-            ordered_exits = get_ordered_exits(entry)
-            filtered_exits = [ex for ex in ordered_exits if ex in self.exits]
-            for i, ex in enumerate(filtered_exits):
+            # Строки направлений
+            ordered = get_ordered_exits(entry)
+            for i, ex in enumerate(ordered):
+                if ex not in self.exits:
+                    continue
                 dir_code = entry + ex
-                dir_display = self.directions[dir_code]
-                dir_label = QLabel(dir_display)
-                dir_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                dir_label = QLabel(self.directions[dir_code])
                 dir_label.setStyleSheet("font-weight: bold;")
-                dir_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
                 group_layout.addWidget(dir_label, i+1, 0)
 
-                for col, vtype in enumerate(headers):
-                    key = (dir_code, vtype)
+                for col, vt in enumerate(self.vehicle_types):
+                    key = (dir_code, vt.name)
                     btn = QPushButton(str(self.counters[key]))
-                    btn.setMinimumSize(70, 50)
+                    btn.setMinimumSize(70,50)
                     btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                     btn.setStyleSheet("""
                         QPushButton {
@@ -239,168 +364,183 @@ class TrafficCounterApp(QMainWindow):
                             background-color: #c0c0c0;
                         }
                     """)
-                    btn.clicked.connect(lambda checked, d=dir_code, t=vtype: self.increment_counter(d, t))
+                    btn.clicked.connect(lambda checked, d=dir_code, t=vt.name: self.inc(d, t))
                     btn.setContextMenuPolicy(Qt.CustomContextMenu)
-                    btn.customContextMenuRequested.connect(lambda pos, d=dir_code, t=vtype: self.decrement_counter(d, t))
+                    btn.customContextMenuRequested.connect(lambda pos, d=dir_code, t=vt.name: self.dec(d, t))
                     self.buttons[key] = btn
                     group_layout.addWidget(btn, i+1, col+1)
 
-            self.table_layout.addWidget(group)
+            container_layout.addWidget(group)
 
-        scroll.setWidget(self.table_widget)
+        scroll.setWidget(container)
         main_layout.addWidget(scroll)
-        self.statusBar().showMessage("Левая кнопка +1, правая -1 | by Kango911")
+        self.statusBar().showMessage("Левая кнопка +1, правая -1. Типы ТС настраиваются.")
 
-    def increment_counter(self, direction, vtype):
+    def create_k9_icon(self):
+        pixmap = QPixmap(128,128)
+        pixmap.fill(QColor(42,130,218))
+        painter = QPainter(pixmap)
+        painter.setPen(QColor(255,255,255))
+        font = QFont("Arial", 48, QFont.Bold)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, "K9")
+        painter.end()
+        return QIcon(pixmap.scaled(64,64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def inc(self, direction, vtype):
         key = (direction, vtype)
         self.counters[key] += 1
-        self.update_button(key)
+        self.buttons[key].setText(str(self.counters[key]))
 
-    def decrement_counter(self, direction, vtype):
+    def dec(self, direction, vtype):
         key = (direction, vtype)
         if self.counters[key] > 0:
             self.counters[key] -= 1
-            self.update_button(key)
-
-    def update_button(self, key):
-        if key in self.buttons:
             self.buttons[key].setText(str(self.counters[key]))
 
     def export_to_excel(self):
         if not OPENPYXL_AVAILABLE:
-            QMessageBox.critical(self, "Ошибка", "Библиотека openpyxl не установлена.\nУстановите её командой: pip install openpyxl")
+            QMessageBox.critical(self, "Ошибка", "Установите openpyxl: pip install openpyxl")
             return
-
-        cross_name = self.cross_name_edit.text().strip() or "Без названия"
-        camera_date = self.date_edit.text().strip() or datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        file_path, _ = QFileDialog.getSaveFileName(self, "Сохранить таблицу",
-                                                   f"{cross_name}_{camera_date.replace(' ', '_').replace(':', '-')}.xlsx",
-                                                   "Excel files (*.xlsx)")
-        if not file_path:
+        cross = self.cross_name.text().strip() or "Без названия"
+        date_str = self.date_edit.text().strip() or datetime.now().strftime("%Y-%m-%d %H:%M")
+        filename = f"{cross}_{date_str.replace(' ', '_').replace(':', '-')}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить Excel", filename, "*.xlsx")
+        if not path:
             return
 
         wb = Workbook()
         ws = wb.active
         ws.title = "Перекрёсток"
 
+        # Заголовок
         ws.merge_cells('A1:I1')
-        ws['A1'] = f"Перекрёсток: {cross_name}  |  Дата записи: {camera_date}"
+        ws['A1'] = f"Перекрёсток: {cross}  |  Дата: {date_str}"
         ws['A1'].font = Font(size=14, bold=True)
-        ws['A1'].alignment = Alignment(horizontal='center')
 
-        headers = ["Направление"] + [VEHICLE_TYPES[v]["label"] for v in VEHICLE_TYPES.keys()]
+        # Заголовки колонок
+        headers = ["Направление"] + [vt.name for vt in self.vehicle_types]
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=3, column=col)
             cell.value = h
             cell.font = Font(bold=True)
-            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.alignment = Alignment(horizontal='center')
             ws.column_dimensions[chr(64+col)].width = 20 if col == 1 else 15
 
         row = 4
-        direction_data = {}
+        direction_data = {}  # direction_code -> {vtype_name: count}
         for entry in self.entries:
-            ordered_exits = get_ordered_exits(entry)
-            for ex in ordered_exits:
+            ordered = get_ordered_exits(entry)
+            for ex in ordered:
                 if ex not in self.exits:
                     continue
                 dir_code = entry + ex
                 dir_display = self.directions[dir_code]
                 ws.cell(row=row, column=1, value=dir_display)
-                for col, vtype in enumerate(VEHICLE_TYPES.keys(), 2):
-                    cnt = self.counters[(dir_code, vtype)]
+                direction_data[dir_code] = {}
+                for col, vt in enumerate(self.vehicle_types, 2):
+                    cnt = self.counters[(dir_code, vt.name)]
                     ws.cell(row=row, column=col, value=cnt)
-                    direction_data.setdefault(dir_code, {})[vtype] = cnt
+                    direction_data[dir_code][vt.name] = cnt
                 row += 1
 
+        # Общие итоги
         total_all = 0
         total_no_public = 0
-        for types_dict in direction_data.values():
-            for vtype, cnt in types_dict.items():
+        for types in direction_data.values():
+            for vname, cnt in types.items():
                 total_all += cnt
-                if vtype not in PUBLIC_TRANSPORT:
+                # ищем тип по имени
+                vt = next((vt for vt in self.vehicle_types if vt.name == vname), None)
+                if vt and not vt.is_public:
                     total_no_public += cnt
-
-        public_percent = (total_no_public / total_all * 100) if total_all > 0 else 0
-
-        entry_totals = defaultdict(int)
-        entry_exit_counts = defaultdict(lambda: defaultdict(int))
-        for dir_code, types_dict in direction_data.items():
-            entry = dir_code[0]
-            exit_ = dir_code[1]
-            total_dir = sum(types_dict.values())
-            if total_dir > 0:
-                entry_totals[entry] += total_dir
-                entry_exit_counts[entry][exit_] += total_dir
+        percent_no_public = (total_no_public / total_all * 100) if total_all else 0
 
         row += 1
-        ws.cell(row=row, column=1, value="")
-        row += 1
-
         ws.cell(row=row, column=1, value="Общее количество ТС:")
         ws.cell(row=row, column=2, value=total_all)
         ws.cell(row=row, column=1).font = Font(bold=True)
         row += 1
-
-        ws.cell(row=row, column=1, value="Количество ТС без общественного транспорта:")
+        ws.cell(row=row, column=1, value="Количество без общественного:")
         ws.cell(row=row, column=2, value=total_no_public)
         ws.cell(row=row, column=1).font = Font(bold=True)
         row += 1
-
-        ws.cell(row=row, column=1, value="Доля транспорта без общественного (%):")
-        ws.cell(row=row, column=2, value=f"{public_percent:.2f}%")
+        ws.cell(row=row, column=1, value="Доля без общественного (%):")
+        ws.cell(row=row, column=2, value=f"{percent_no_public:.2f}%")
         ws.cell(row=row, column=1).font = Font(bold=True)
         row += 2
 
+        # Доли поворотов по въездам
         ws.cell(row=row, column=1, value="ДОЛИ ПОВОРОТОВ ПО ВЪЕЗДАМ")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers))
         ws.cell(row=row, column=1).font = Font(bold=True, size=12)
         row += 1
+
+        # Собираем суммы по въездам и выездам
+        entry_totals = defaultdict(int)
+        entry_exit_counts = defaultdict(lambda: defaultdict(int))
+        for dir_code, types in direction_data.items():
+            entry = dir_code[0]
+            exit_ = dir_code[1]
+            total_dir = sum(types.values())
+            entry_totals[entry] += total_dir
+            entry_exit_counts[entry][exit_] += total_dir
 
         for entry in self.entries:
             total_entry = entry_totals.get(entry, 0)
             ws.cell(row=row, column=1, value=f"Въезд: {DIRECTION_NAMES[entry]}")
             ws.cell(row=row, column=1).font = Font(bold=True)
             row += 1
-            ordered_exits = get_ordered_exits(entry)
-            filtered_exits = [ex for ex in ordered_exits if ex in self.exits]
-            for col, ex in enumerate(filtered_exits, 2):
+            ordered = get_ordered_exits(entry)
+            filtered = [ex for ex in ordered if ex in self.exits]
+            for col, ex in enumerate(filtered, 2):
                 ws.cell(row=row, column=col, value=f"→ {ex}")
                 ws.cell(row=row, column=col).font = Font(bold=True)
             row += 1
-            for ex in filtered_exits:
+            for ex in filtered:
                 cnt = entry_exit_counts[entry].get(ex, 0)
-                percent = (cnt / total_entry * 100) if total_entry > 0 else 0
-                col = filtered_exits.index(ex) + 2
+                percent = (cnt / total_entry * 100) if total_entry else 0
+                col = filtered.index(ex) + 2
                 ws.cell(row=row, column=col, value=f"{percent:.1f}%")
-            row += 1
-            row += 1
+            row += 2
 
-        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-        for r in range(3, row+1):
+        # Оформление границ
+        thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        for r in range(3, row):
             for c in range(1, len(headers)+1):
                 cell = ws.cell(row=r, column=c)
                 if cell.value is not None:
-                    cell.border = thin_border
+                    cell.border = thin
 
-        wb.save(file_path)
-        QMessageBox.information(self, "Экспорт завершён", f"Таблица сохранена в:\n{file_path}")
+        wb.save(path)
+        QMessageBox.information(self, "Готово", f"Экспорт завершён:\n{path}")
 
+# ------------------------------------------------------------
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    app.setWindowIcon(create_k9_icon())  # иконка для всех окон
 
-    dialog = DirectionSelectionDialog()
-    if dialog.exec() != QDialog.Accepted:
+    # 1. Выбор направлений
+    dir_dialog = DirectionSelectionDialog()
+    if dir_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
-    entries, exits = dialog.get_selected_directions()
+    entries, exits = dir_dialog.get_selected()
     if not entries or not exits:
-        QMessageBox.critical(None, "Ошибка", "Не выбрано ни одного въезда или выезда. Приложение закроется.")
+        QMessageBox.critical(None, "Ошибка", "Не выбраны въезды или выезды")
         sys.exit(1)
-    window = TrafficCounterApp(entries, exits)
+
+    # 2. Выбор/редактирование типов ТС
+    types_dialog = VehicleTypesDialog()
+    if types_dialog.exec() != QDialog.Accepted:
+        sys.exit(0)
+    vehicle_types = types_dialog.get_types()
+    if not vehicle_types:
+        QMessageBox.critical(None, "Ошибка", "Не задано ни одного типа ТС")
+        sys.exit(1)
+
+    # 3. Главное окно
+    window = TrafficCounterApp(entries, exits, vehicle_types)
     window.show()
-    window.setWindowIcon(create_k9_icon())
     sys.exit(app.exec())
 
 if __name__ == "__main__":
