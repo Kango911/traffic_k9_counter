@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea,
     QMessageBox, QFileDialog, QToolTip, QDialog, QCheckBox, QDialogButtonBox,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog
+    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog,
+    QButtonGroup, QRadioButton
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
@@ -111,11 +112,54 @@ class DirectionSelectionDialog(QDialog):
         return entries, exits
 
 # ------------------------------------------------------------
-# Второе окно: выбор активных типов ТС (с автоматическим сохранением)
+# Диалог выбора источника типов ТС (перед открытием редактора)
+class LoadSourceDialog(QDialog):
+    def __init__(self, auto_save_exists, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Загрузка типов транспортных средств")
+        self.setModal(True)
+        self.resize(400, 200)
+
+        layout = QVBoxLayout(self)
+        label = QLabel("Выберите источник загрузки списка типов ТС:")
+        layout.addWidget(label)
+
+        self.auto_radio = QRadioButton("Автосохранённый файл (предыдущие настройки)")
+        self.file_radio = QRadioButton("Из внешнего JSON-файла...")
+        self.default_radio = QRadioButton("Стандартный набор (по умолчанию)")
+
+        # Если автосохранения нет, предлагаем только два варианта
+        if not auto_save_exists:
+            self.auto_radio.setEnabled(False)
+            self.auto_radio.setText("Автосохранённый файл (не найден)")
+
+        layout.addWidget(self.auto_radio)
+        layout.addWidget(self.file_radio)
+        layout.addWidget(self.default_radio)
+
+        self.auto_radio.setChecked(True)
+        self.default_radio.setChecked(False)
+        self.file_radio.setChecked(False)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_choice(self):
+        if self.auto_radio.isChecked():
+            return "auto"
+        elif self.file_radio.isChecked():
+            return "file"
+        else:
+            return "default"
+
+# ------------------------------------------------------------
+# Второе окно: редактор типов ТС (с возможностью загрузки из разных источников)
 class VehicleTypesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Выбор типов транспортных средств")
+        self.setWindowTitle("Редактирование типов транспортных средств")
         self.setModal(True)
         self.resize(750, 500)
 
@@ -157,13 +201,12 @@ class VehicleTypesDialog(QDialog):
         self.load_btn.clicked.connect(self.load_from_json)
         self.save_btn.clicked.connect(self.save_to_json)
 
-        # Определяем путь для автосохранения (рядом с программой)
+        # Путь для автосохранения
         self.auto_save_path = os.path.join(os.path.dirname(sys.argv[0]), "vehicle_types_auto.json")
-        # Загружаем предустановленные типы, затем пытаемся загрузить автосохранённые
         self.default_types = self.get_default_types()
-        self.all_types = self.default_types[:]
-        self.load_auto_save()          # загружаем, если есть
-        self.refresh_table()
+
+        # Спрашиваем пользователя, откуда загружать
+        self.load_initial_types()
 
     def get_default_types(self):
         return [
@@ -178,6 +221,36 @@ class VehicleTypesDialog(QDialog):
             VehicleType("trol", "Троллейбусы", True),
             VehicleType("tram", "Трамваи", True)
         ]
+
+    def load_initial_types(self):
+        auto_exists = os.path.exists(self.auto_save_path)
+        source_dialog = LoadSourceDialog(auto_exists, self)
+        if source_dialog.exec() != QDialog.Accepted:
+            # Если пользователь отменил выбор, загружаем стандартные
+            self.all_types = self.default_types[:]
+            return
+
+        choice = source_dialog.get_choice()
+        if choice == "auto" and auto_exists:
+            self.load_auto_save()
+            if not self.all_types:
+                self.all_types = self.default_types[:]
+        elif choice == "file":
+            path, _ = QFileDialog.getOpenFileName(self, "Выберите JSON файл с типами", "", "JSON (*.json)")
+            if path:
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    self.all_types = [VehicleType.from_dict(d) for d in data]
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл:\n{e}")
+                    self.all_types = self.default_types[:]
+            else:
+                self.all_types = self.default_types[:]
+        else:  # default
+            self.all_types = self.default_types[:]
+
+        self.refresh_table()
 
     def refresh_table(self):
         self.table.setRowCount(len(self.all_types))
@@ -206,7 +279,7 @@ class VehicleTypesDialog(QDialog):
             new_type = VehicleType(name.strip(), desc, is_public)
             self.all_types.append(new_type)
             self.refresh_table()
-            self.save_auto_save()   # автосохранение
+            self.save_auto_save()
 
     def edit_type(self):
         row = self.table.currentRow()
@@ -260,8 +333,10 @@ class VehicleTypesDialog(QDialog):
                 loaded = [VehicleType.from_dict(d) for d in data]
                 if loaded:
                     self.all_types = loaded
+                    return True
             except Exception as e:
                 print(f"Ошибка загрузки автосохранения: {e}")
+        return False
 
     def save_to_json(self):
         """Ручной экспорт в выбранный файл"""
@@ -284,13 +359,13 @@ class VehicleTypesDialog(QDialog):
                     data = json.load(f)
                 self.all_types = [VehicleType.from_dict(d) for d in data]
                 self.refresh_table()
-                self.save_auto_save()   # после импорта тоже автосохраняем
+                self.save_auto_save()
                 QMessageBox.information(self, "Загружено", f"Загружено {len(self.all_types)} типов")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def get_selected_types(self):
-        """Возвращает список типов, у которых включен первый чекбокс, и обновляет флаги is_public"""
+        """Возвращает список типов, у которых включен первый чекбокс"""
         selected = []
         for i in range(self.table.rowCount()):
             chk = self.table.cellWidget(i, 0)
@@ -308,13 +383,13 @@ class VehicleTypesDialog(QDialog):
         super().accept()
 
 # ------------------------------------------------------------
-# Третье окно: главный счётчик
+# Третье окно: главный счётчик (без изменений)
 class TrafficCounterApp(QMainWindow):
     def __init__(self, entries, exits, vehicle_types):
         super().__init__()
         self.entries = entries
         self.exits = exits
-        self.vehicle_types = vehicle_types   # только выбранные типы
+        self.vehicle_types = vehicle_types
 
         # Генерация направлений
         self.directions = {}
@@ -333,7 +408,7 @@ class TrafficCounterApp(QMainWindow):
         self.setMinimumSize(800, 600)
         self.setWindowIcon(self.create_k9_icon())
 
-        self.counters = defaultdict(int)   # ключ (direction_code, vehicle_name)
+        self.counters = defaultdict(int)
         self.buttons = {}
 
         central = QWidget()
@@ -371,7 +446,7 @@ class TrafficCounterApp(QMainWindow):
             group_layout = QGridLayout(group)
             group_layout.setColumnStretch(0, 0)
 
-            # Заголовки типов (только выбранные)
+            # Заголовки типов
             for col, vt in enumerate(self.vehicle_types):
                 widget = QWidget()
                 h_layout = QHBoxLayout(widget)
@@ -479,7 +554,7 @@ class TrafficCounterApp(QMainWindow):
             ws.column_dimensions[chr(64+col)].width = 20 if col == 1 else 15
 
         row = 4
-        direction_data = {}  # direction_code -> {vtype_name: count}
+        direction_data = {}
         for entry in self.entries:
             ordered = get_ordered_exits(entry)
             for ex in ordered:
@@ -526,7 +601,6 @@ class TrafficCounterApp(QMainWindow):
         ws.cell(row=row, column=1).font = Font(bold=True, size=12)
         row += 1
 
-        # Собираем суммы по въездам и выездам
         entry_totals = defaultdict(int)
         entry_exit_counts = defaultdict(lambda: defaultdict(int))
         for dir_code, types in direction_data.items():
@@ -554,7 +628,6 @@ class TrafficCounterApp(QMainWindow):
                 ws.cell(row=row, column=col, value=f"{percent:.1f}%")
             row += 2
 
-        # Оформление границ
         thin = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         for r in range(3, row):
             for c in range(1, len(headers)+1):
@@ -569,7 +642,6 @@ class TrafficCounterApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    app.setWindowIcon(QIcon())  # временно, иконка будет у окон
 
     # 1. Выбор направлений
     dir_dialog = DirectionSelectionDialog()
@@ -580,7 +652,7 @@ def main():
         QMessageBox.critical(None, "Ошибка", "Не выбраны въезды или выезды")
         sys.exit(1)
 
-    # 2. Выбор активных типов ТС (с автосохранением)
+    # 2. Выбор и редактирование типов ТС (с диалогом выбора источника)
     types_dialog = VehicleTypesDialog()
     if types_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
