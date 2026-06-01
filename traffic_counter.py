@@ -9,10 +9,10 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea,
     QMessageBox, QFileDialog, QToolTip, QDialog, QCheckBox, QDialogButtonBox,
     QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog,
-    QButtonGroup, QRadioButton
+    QButtonGroup, QRadioButton, QToolBar, QStatusBar
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
+from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon, QAction
 
 # Экспорт в Excel
 try:
@@ -50,7 +50,7 @@ class VehicleType:
         return VehicleType(data["name"], data.get("description", ""), data.get("is_public", False))
 
 # ------------------------------------------------------------
-# Первое окно: выбор направлений
+# Первое окно: выбор направлений (без изменений)
 class DirectionSelectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,7 +85,6 @@ class DirectionSelectionDialog(QDialog):
             exit_layout.addWidget(cb)
         layout.addWidget(exit_group)
 
-        # Кнопки быстрого выбора
         btn_layout = QHBoxLayout()
         def all_entries(checked): [cb.setChecked(checked) for cb in self.entry_cbs.values()]
         def all_exits(checked): [cb.setChecked(checked) for cb in self.exit_cbs.values()]
@@ -95,7 +94,6 @@ class DirectionSelectionDialog(QDialog):
         btn_layout.addWidget(QPushButton("Выезды: нет", clicked=lambda: all_exits(False)))
         layout.addLayout(btn_layout)
 
-        # Контакт
         contact = QLabel("По вопросам обращаться к @Kango911")
         contact.setAlignment(Qt.AlignCenter)
         contact.setStyleSheet("color: gray; font-style: italic;")
@@ -112,7 +110,7 @@ class DirectionSelectionDialog(QDialog):
         return entries, exits
 
 # ------------------------------------------------------------
-# Диалог выбора источника типов ТС (перед открытием редактора)
+# Диалог выбора источника типов ТС (без изменений)
 class LoadSourceDialog(QDialog):
     def __init__(self, auto_save_exists, parent=None):
         super().__init__(parent)
@@ -128,7 +126,6 @@ class LoadSourceDialog(QDialog):
         self.file_radio = QRadioButton("Из внешнего JSON-файла...")
         self.default_radio = QRadioButton("Стандартный набор (по умолчанию)")
 
-        # Если автосохранения нет, предлагаем только два варианта
         if not auto_save_exists:
             self.auto_radio.setEnabled(False)
             self.auto_radio.setText("Автосохранённый файл (не найден)")
@@ -138,8 +135,6 @@ class LoadSourceDialog(QDialog):
         layout.addWidget(self.default_radio)
 
         self.auto_radio.setChecked(True)
-        self.default_radio.setChecked(False)
-        self.file_radio.setChecked(False)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.accept)
@@ -155,7 +150,7 @@ class LoadSourceDialog(QDialog):
             return "default"
 
 # ------------------------------------------------------------
-# Второе окно: редактор типов ТС (с возможностью загрузки из разных источников)
+# Второе окно: редактор типов ТС (без изменений, кроме компактности?)
 class VehicleTypesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -165,7 +160,6 @@ class VehicleTypesDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Таблица: чекбокс "Вкл.", название, описание, чекбокс "Общественный"
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Вкл.", "Название", "Описание", "Общественный"])
@@ -174,13 +168,12 @@ class VehicleTypesDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.table)
 
-        # Кнопки управления
         btn_layout = QHBoxLayout()
-        self.add_btn = QPushButton("Добавить новый тип")
+        self.add_btn = QPushButton("Добавить")
         self.edit_btn = QPushButton("Редактировать")
-        self.del_btn = QPushButton("Удалить тип")
-        self.load_btn = QPushButton("Загрузить из JSON (ручной импорт)")
-        self.save_btn = QPushButton("Сохранить в JSON (ручной экспорт)")
+        self.del_btn = QPushButton("Удалить")
+        self.load_btn = QPushButton("Загрузить JSON")
+        self.save_btn = QPushButton("Сохранить JSON")
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.edit_btn)
         btn_layout.addWidget(self.del_btn)
@@ -188,24 +181,19 @@ class VehicleTypesDialog(QDialog):
         btn_layout.addWidget(self.save_btn)
         layout.addLayout(btn_layout)
 
-        # Кнопки OK/Cancel
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         layout.addWidget(self.button_box)
 
-        # Сигналы
         self.add_btn.clicked.connect(self.add_type)
         self.edit_btn.clicked.connect(self.edit_type)
         self.del_btn.clicked.connect(self.del_type)
         self.load_btn.clicked.connect(self.load_from_json)
         self.save_btn.clicked.connect(self.save_to_json)
 
-        # Путь для автосохранения
         self.auto_save_path = os.path.join(os.path.dirname(sys.argv[0]), "vehicle_types_auto.json")
         self.default_types = self.get_default_types()
-
-        # Спрашиваем пользователя, откуда загружать
         self.load_initial_types()
 
     def get_default_types(self):
@@ -226,7 +214,6 @@ class VehicleTypesDialog(QDialog):
         auto_exists = os.path.exists(self.auto_save_path)
         source_dialog = LoadSourceDialog(auto_exists, self)
         if source_dialog.exec() != QDialog.Accepted:
-            # Если пользователь отменил выбор, загружаем стандартные
             self.all_types = self.default_types[:]
             return
 
@@ -247,23 +234,18 @@ class VehicleTypesDialog(QDialog):
                     self.all_types = self.default_types[:]
             else:
                 self.all_types = self.default_types[:]
-        else:  # default
+        else:
             self.all_types = self.default_types[:]
-
         self.refresh_table()
 
     def refresh_table(self):
         self.table.setRowCount(len(self.all_types))
         for i, vt in enumerate(self.all_types):
-            # Чекбокс "Включить" (по умолчанию все выбраны)
             chk = QCheckBox()
             chk.setChecked(True)
             self.table.setCellWidget(i, 0, chk)
-            # Название
             self.table.setItem(i, 1, QTableWidgetItem(vt.name))
-            # Описание
             self.table.setItem(i, 2, QTableWidgetItem(vt.description))
-            # Чекбокс "Общественный"
             pub_chk = QCheckBox()
             pub_chk.setChecked(vt.is_public)
             self.table.setCellWidget(i, 3, pub_chk)
@@ -316,7 +298,6 @@ class VehicleTypesDialog(QDialog):
             self.save_auto_save()
 
     def save_auto_save(self):
-        """Автоматически сохраняет текущий список all_types в JSON"""
         try:
             data = [vt.to_dict() for vt in self.all_types]
             with open(self.auto_save_path, 'w', encoding='utf-8') as f:
@@ -325,7 +306,6 @@ class VehicleTypesDialog(QDialog):
             print(f"Ошибка автосохранения: {e}")
 
     def load_auto_save(self):
-        """Загружает список из автосохранения, если файл существует"""
         if os.path.exists(self.auto_save_path):
             try:
                 with open(self.auto_save_path, 'r', encoding='utf-8') as f:
@@ -339,7 +319,6 @@ class VehicleTypesDialog(QDialog):
         return False
 
     def save_to_json(self):
-        """Ручной экспорт в выбранный файл"""
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить типы", "vehicle_types.json", "JSON (*.json)")
         if path:
             data = [vt.to_dict() for vt in self.all_types]
@@ -351,7 +330,6 @@ class VehicleTypesDialog(QDialog):
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def load_from_json(self):
-        """Ручной импорт из выбранного файла (заменяет текущий список)"""
         path, _ = QFileDialog.getOpenFileName(self, "Загрузить типы", "", "JSON (*.json)")
         if path:
             try:
@@ -365,7 +343,6 @@ class VehicleTypesDialog(QDialog):
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def get_selected_types(self):
-        """Возвращает список типов, у которых включен первый чекбокс"""
         selected = []
         for i in range(self.table.rowCount()):
             chk = self.table.cellWidget(i, 0)
@@ -378,12 +355,33 @@ class VehicleTypesDialog(QDialog):
         return selected
 
     def accept(self):
-        # Перед закрытием сохраняем текущее состояние (включая чекбоксы)
         self.save_auto_save()
         super().accept()
 
 # ------------------------------------------------------------
-# Третье окно: главный счётчик (без изменений)
+# Компактное главное окно с возможностью сворачивания групп
+class CollapsibleGroupBox(QGroupBox):
+    def __init__(self, title, parent=None):
+        super().__init__(title, parent)
+        self.setCheckable(True)
+        self.setChecked(True)
+        self.toggled.connect(self.on_toggled)
+        self.setStyleSheet("""
+            QGroupBox::indicator {
+                subcontrol-position: top left;
+                width: 16px;
+                height: 16px;
+            }
+            QGroupBox {
+                margin-top: 12px;
+            }
+        """)
+
+    def on_toggled(self, checked):
+        for child in self.findChildren(QWidget):
+            if child != self:
+                child.setVisible(checked)
+
 class TrafficCounterApp(QMainWindow):
     def __init__(self, entries, exits, vehicle_types):
         super().__init__()
@@ -405,58 +403,71 @@ class TrafficCounterApp(QMainWindow):
             sys.exit(1)
 
         self.setWindowTitle("Счётчик транспортных средств на перекрёстке")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(500, 400)   # компактный минимальный размер
         self.setWindowIcon(self.create_k9_icon())
 
         self.counters = defaultdict(int)
         self.buttons = {}
 
+        # Центральный виджет с прокруткой
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(2)
 
-        # Верхняя панель
-        top = QHBoxLayout()
+        # Верхняя панель - компактная
+        top_widget = QWidget()
+        top_layout = QHBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
         self.cross_name = QLineEdit()
-        self.cross_name.setPlaceholderText("Название перекрёстка")
-        self.cross_name.setText("Перекрёсток ул. Ленина - ул. Советская")
-        top.addWidget(QLabel("Перекрёсток:"))
-        top.addWidget(self.cross_name)
+        self.cross_name.setPlaceholderText("Перекрёсток")
+        self.cross_name.setText("Перекрёсток")
+        self.cross_name.setMaximumWidth(200)
+        top_layout.addWidget(QLabel("Перекрёсток:"))
+        top_layout.addWidget(self.cross_name)
 
         self.date_edit = QLineEdit()
         self.date_edit.setText(datetime.now().strftime("%Y-%m-%d %H:%M"))
-        top.addWidget(QLabel("Дата записи:"))
-        top.addWidget(self.date_edit)
+        self.date_edit.setMaximumWidth(150)
+        top_layout.addWidget(QLabel("Дата:"))
+        top_layout.addWidget(self.date_edit)
 
-        self.export_btn = QPushButton("Экспорт в Excel")
+        self.export_btn = QPushButton("Excel")
+        self.export_btn.setFixedWidth(60)
         self.export_btn.clicked.connect(self.export_to_excel)
-        top.addWidget(self.export_btn)
+        top_layout.addWidget(self.export_btn)
 
-        main_layout.addLayout(top)
+        top_layout.addStretch()
+        main_layout.addWidget(top_widget)
 
         # Прокручиваемая область с группами
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         container = QWidget()
         container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(15)
+        container_layout.setSpacing(5)
+        container_layout.setContentsMargins(2, 2, 2, 2)
 
         for entry in self.entries:
-            group = QGroupBox(f"Направления из {DIRECTION_NAMES[entry]}")
+            group = CollapsibleGroupBox(f"Направления из {DIRECTION_NAMES[entry]}")
             group_layout = QGridLayout(group)
-            group_layout.setColumnStretch(0, 0)
+            group_layout.setVerticalSpacing(2)
+            group_layout.setHorizontalSpacing(2)
 
-            # Заголовки типов
+            # Заголовки типов (только названия, без "i" для компактности? но оставим i)
             for col, vt in enumerate(self.vehicle_types):
                 widget = QWidget()
                 h_layout = QHBoxLayout(widget)
                 h_layout.setContentsMargins(0,0,0,0)
                 label = QLabel(vt.name)
-                label.setWordWrap(True)
                 label.setAlignment(Qt.AlignCenter)
-                label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                label.setWordWrap(False)
+                label.setFixedHeight(20)
                 info_btn = QPushButton("i")
-                info_btn.setFixedSize(22,22)
+                info_btn.setFixedSize(18,18)
                 info_btn.setToolTip(vt.description if vt.description else "Нет описания")
                 h_layout.addWidget(label, 1)
                 h_layout.addWidget(info_btn, 0)
@@ -471,19 +482,19 @@ class TrafficCounterApp(QMainWindow):
                 dir_code = entry + ex
                 dir_label = QLabel(self.directions[dir_code])
                 dir_label.setStyleSheet("font-weight: bold;")
+                dir_label.setFixedHeight(30)
                 group_layout.addWidget(dir_label, i+1, 0)
 
                 for col, vt in enumerate(self.vehicle_types):
                     key = (dir_code, vt.name)
                     btn = QPushButton(str(self.counters[key]))
-                    btn.setMinimumSize(70,50)
-                    btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    btn.setFixedSize(50, 30)   # компактные кнопки
                     btn.setStyleSheet("""
                         QPushButton {
                             background-color: #e0e0e0;
                             border: 1px solid #aaa;
-                            border-radius: 5px;
-                            font-size: 14px;
+                            border-radius: 3px;
+                            font-size: 11px;
                             font-weight: bold;
                         }
                         QPushButton:hover {
@@ -500,18 +511,20 @@ class TrafficCounterApp(QMainWindow):
 
         scroll.setWidget(container)
         main_layout.addWidget(scroll)
-        self.statusBar().showMessage("Левая кнопка +1, правая -1. Типы ТС настраиваются во втором окне.")
+
+        # Статус бар
+        self.statusBar().showMessage("Левая кнопка +1, правая -1 | Группы можно сворачивать")
 
     def create_k9_icon(self):
-        pixmap = QPixmap(128,128)
+        pixmap = QPixmap(64,64)
         pixmap.fill(QColor(42,130,218))
         painter = QPainter(pixmap)
         painter.setPen(QColor(255,255,255))
-        font = QFont("Arial", 48, QFont.Bold)
+        font = QFont("Arial", 24, QFont.Bold)
         painter.setFont(font)
         painter.drawText(pixmap.rect(), Qt.AlignCenter, "K9")
         painter.end()
-        return QIcon(pixmap.scaled(64,64, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        return QIcon(pixmap)
 
     def inc(self, direction, vtype):
         key = (direction, vtype)
@@ -539,12 +552,10 @@ class TrafficCounterApp(QMainWindow):
         ws = wb.active
         ws.title = "Перекрёсток"
 
-        # Заголовок
         ws.merge_cells('A1:I1')
         ws['A1'] = f"Перекрёсток: {cross}  |  Дата: {date_str}"
         ws['A1'].font = Font(size=14, bold=True)
 
-        # Заголовки колонок
         headers = ["Направление"] + [vt.name for vt in self.vehicle_types]
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=3, column=col)
@@ -570,7 +581,6 @@ class TrafficCounterApp(QMainWindow):
                     direction_data[dir_code][vt.name] = cnt
                 row += 1
 
-        # Общие итоги
         total_all = 0
         total_no_public = 0
         for types in direction_data.values():
@@ -592,10 +602,8 @@ class TrafficCounterApp(QMainWindow):
         row += 1
         ws.cell(row=row, column=1, value="Доля без общественного (%):")
         ws.cell(row=row, column=2, value=f"{percent_no_public:.2f}%")
-        ws.cell(row=row, column=1).font = Font(bold=True)
         row += 2
 
-        # Доли поворотов по въездам
         ws.cell(row=row, column=1, value="ДОЛИ ПОВОРОТОВ ПО ВЪЕЗДАМ")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers))
         ws.cell(row=row, column=1).font = Font(bold=True, size=12)
@@ -643,7 +651,6 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    # 1. Выбор направлений
     dir_dialog = DirectionSelectionDialog()
     if dir_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
@@ -652,7 +659,6 @@ def main():
         QMessageBox.critical(None, "Ошибка", "Не выбраны въезды или выезды")
         sys.exit(1)
 
-    # 2. Выбор и редактирование типов ТС (с диалогом выбора источника)
     types_dialog = VehicleTypesDialog()
     if types_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
@@ -661,7 +667,6 @@ def main():
         QMessageBox.critical(None, "Ошибка", "Не выбран ни один тип ТС")
         sys.exit(1)
 
-    # 3. Главное окно
     window = TrafficCounterApp(entries, exits, vehicle_types)
     window.show()
     sys.exit(app.exec())
