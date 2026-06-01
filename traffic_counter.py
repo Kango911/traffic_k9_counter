@@ -8,10 +8,9 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea,
     QMessageBox, QFileDialog, QToolTip, QDialog, QCheckBox, QDialogButtonBox,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog,
-    QLineEdit, QTextEdit
+    QSizePolicy, QTableWidget, QTableWidgetItem, QHeaderView, QInputDialog
 )
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap, QPainter, QColor, QIcon
 
 # Экспорт в Excel
@@ -50,7 +49,7 @@ class VehicleType:
         return VehicleType(data["name"], data.get("description", ""), data.get("is_public", False))
 
 # ------------------------------------------------------------
-# Диалог выбора направлений (первое окно)
+# Первое окно: выбор направлений
 class DirectionSelectionDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -112,30 +111,30 @@ class DirectionSelectionDialog(QDialog):
         return entries, exits
 
 # ------------------------------------------------------------
-# Диалог управления типами ТС (второе окно)
+# Второе окно: выбор активных типов ТС (с чекбоксами)
 class VehicleTypesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Типы транспортных средств")
+        self.setWindowTitle("Выбор типов транспортных средств")
         self.setModal(True)
-        self.resize(700, 500)
+        self.resize(750, 500)
 
         layout = QVBoxLayout(self)
 
-        # Таблица
+        # Таблица: чекбокс "Вкл.", название, описание, чекбокс "Общественный"
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Название", "Описание", "Общественный"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Вкл.", "Название", "Описание", "Общественный"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.table)
 
         # Кнопки управления
         btn_layout = QHBoxLayout()
-        self.add_btn = QPushButton("Добавить")
+        self.add_btn = QPushButton("Добавить новый тип")
         self.edit_btn = QPushButton("Редактировать")
-        self.del_btn = QPushButton("Удалить")
+        self.del_btn = QPushButton("Удалить тип")
         self.load_btn = QPushButton("Загрузить из JSON")
         self.save_btn = QPushButton("Сохранить в JSON")
         btn_layout.addWidget(self.add_btn)
@@ -160,11 +159,10 @@ class VehicleTypesDialog(QDialog):
 
         # Загружаем предустановленные типы
         self.default_types = self.get_default_types()
-        self.vehicle_types = self.default_types[:]
+        self.all_types = self.default_types[:]   # полный список
         self.refresh_table()
 
     def get_default_types(self):
-        # Типы из задания (по файлу 1.Классы.docx)
         return [
             VehicleType("car", "Легковые автомобили", False),
             VehicleType("mini_bus", "Микроавтобусы (газель, скорая)", True),
@@ -179,13 +177,20 @@ class VehicleTypesDialog(QDialog):
         ]
 
     def refresh_table(self):
-        self.table.setRowCount(len(self.vehicle_types))
-        for i, vt in enumerate(self.vehicle_types):
-            self.table.setItem(i, 0, QTableWidgetItem(vt.name))
-            self.table.setItem(i, 1, QTableWidgetItem(vt.description))
+        self.table.setRowCount(len(self.all_types))
+        for i, vt in enumerate(self.all_types):
+            # Чекбокс "Включить" (по умолчанию все выбраны)
             chk = QCheckBox()
-            chk.setChecked(vt.is_public)
-            self.table.setCellWidget(i, 2, chk)
+            chk.setChecked(True)
+            self.table.setCellWidget(i, 0, chk)
+            # Название
+            self.table.setItem(i, 1, QTableWidgetItem(vt.name))
+            # Описание
+            self.table.setItem(i, 2, QTableWidgetItem(vt.description))
+            # Чекбокс "Общественный"
+            pub_chk = QCheckBox()
+            pub_chk.setChecked(vt.is_public)
+            self.table.setCellWidget(i, 3, pub_chk)
         self.table.resizeRowsToContents()
 
     def add_type(self):
@@ -193,8 +198,10 @@ class VehicleTypesDialog(QDialog):
         if ok and name.strip():
             desc, ok2 = QInputDialog.getText(self, "Описание", "Описание:", QLineEdit.Normal, "")
             desc = desc if ok2 else ""
-            is_public = QMessageBox.question(self, "Общественный?", "Это общественный транспорт?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
-            self.vehicle_types.append(VehicleType(name.strip(), desc, is_public))
+            is_public = QMessageBox.question(self, "Общественный?", "Это общественный транспорт?",
+                                             QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes
+            new_type = VehicleType(name.strip(), desc, is_public)
+            self.all_types.append(new_type)
             self.refresh_table()
 
     def edit_type(self):
@@ -202,13 +209,14 @@ class VehicleTypesDialog(QDialog):
         if row < 0:
             QMessageBox.warning(self, "Ошибка", "Выберите тип для редактирования")
             return
-        vt = self.vehicle_types[row]
+        vt = self.all_types[row]
         name, ok = QInputDialog.getText(self, "Редактирование", "Название:", QLineEdit.Normal, vt.name)
         if ok and name.strip():
             desc, ok2 = QInputDialog.getText(self, "Описание", "Описание:", QLineEdit.Normal, vt.description)
             desc = desc if ok2 else vt.description
             is_public = QMessageBox.question(self, "Общественный?", "Это общественный транспорт?",
-                                             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes if vt.is_public else QMessageBox.No) == QMessageBox.Yes
+                                             QMessageBox.Yes | QMessageBox.No,
+                                             QMessageBox.Yes if vt.is_public else QMessageBox.No) == QMessageBox.Yes
             vt.name = name.strip()
             vt.description = desc
             vt.is_public = is_public
@@ -219,22 +227,22 @@ class VehicleTypesDialog(QDialog):
         if row < 0:
             QMessageBox.warning(self, "Ошибка", "Выберите тип для удаления")
             return
-        if len(self.vehicle_types) == 1:
+        if len(self.all_types) == 1:
             QMessageBox.warning(self, "Ошибка", "Нельзя удалить единственный тип")
             return
-        reply = QMessageBox.question(self, "Удаление", f"Удалить тип '{self.vehicle_types[row].name}'?",
+        reply = QMessageBox.question(self, "Удаление", f"Удалить тип '{self.all_types[row].name}'?",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
-            del self.vehicle_types[row]
+            del self.all_types[row]
             self.refresh_table()
 
     def save_to_json(self):
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить типы", "vehicle_types.json", "JSON (*.json)")
         if path:
-            data = [vt.to_dict() for vt in self.vehicle_types]
+            data = [vt.to_dict() for vt in self.all_types]
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Сохранено", f"Сохранено в {path}")
+            QMessageBox.information(self, "Сохранено", f"Сохранено {len(self.all_types)} типов")
 
     def load_from_json(self):
         path, _ = QFileDialog.getOpenFileName(self, "Загрузить типы", "", "JSON (*.json)")
@@ -242,28 +250,34 @@ class VehicleTypesDialog(QDialog):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                self.vehicle_types = [VehicleType.from_dict(d) for d in data]
+                self.all_types = [VehicleType.from_dict(d) for d in data]
                 self.refresh_table()
-                QMessageBox.information(self, "Загружено", f"Загружено {len(self.vehicle_types)} типов")
+                QMessageBox.information(self, "Загружено", f"Загружено {len(self.all_types)} типов")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", str(e))
 
-    def get_types(self):
-        # Считать флаги из чекбоксов
-        for i, vt in enumerate(self.vehicle_types):
-            chk = self.table.cellWidget(i, 2)
-            if chk:
-                vt.is_public = chk.isChecked()
-        return self.vehicle_types
+    def get_selected_types(self):
+        """Возвращает список типов, у которых включен первый чекбокс"""
+        selected = []
+        for i in range(self.table.rowCount()):
+            chk = self.table.cellWidget(i, 0)
+            if chk and chk.isChecked():
+                vt = self.all_types[i]
+                # Обновляем флаг общественного из чекбокса в колонке 3
+                pub_chk = self.table.cellWidget(i, 3)
+                if pub_chk:
+                    vt.is_public = pub_chk.isChecked()
+                selected.append(vt)
+        return selected
 
 # ------------------------------------------------------------
-# Главное окно счётчика (третье окно)
+# Третье окно: главный счётчик
 class TrafficCounterApp(QMainWindow):
     def __init__(self, entries, exits, vehicle_types):
         super().__init__()
         self.entries = entries
         self.exits = exits
-        self.vehicle_types = vehicle_types   # список объектов VehicleType
+        self.vehicle_types = vehicle_types   # только выбранные типы
 
         # Генерация направлений
         self.directions = {}
@@ -282,7 +296,7 @@ class TrafficCounterApp(QMainWindow):
         self.setMinimumSize(800, 600)
         self.setWindowIcon(self.create_k9_icon())
 
-        self.counters = defaultdict(int)   # ключ (direction_code, vehicle_type_name)
+        self.counters = defaultdict(int)   # ключ (direction_code, vehicle_name)
         self.buttons = {}
 
         central = QWidget()
@@ -320,7 +334,7 @@ class TrafficCounterApp(QMainWindow):
             group_layout = QGridLayout(group)
             group_layout.setColumnStretch(0, 0)
 
-            # Заголовки типов
+            # Заголовки типов (только выбранные)
             for col, vt in enumerate(self.vehicle_types):
                 widget = QWidget()
                 h_layout = QHBoxLayout(widget)
@@ -374,7 +388,7 @@ class TrafficCounterApp(QMainWindow):
 
         scroll.setWidget(container)
         main_layout.addWidget(scroll)
-        self.statusBar().showMessage("Левая кнопка +1, правая -1. Типы ТС настраиваются.")
+        self.statusBar().showMessage("Левая кнопка +1, правая -1. Типы ТС настраиваются во втором окне.")
 
     def create_k9_icon(self):
         pixmap = QPixmap(128,128)
@@ -450,7 +464,6 @@ class TrafficCounterApp(QMainWindow):
         for types in direction_data.values():
             for vname, cnt in types.items():
                 total_all += cnt
-                # ищем тип по имени
                 vt = next((vt for vt in self.vehicle_types if vt.name == vname), None)
                 if vt and not vt.is_public:
                     total_no_public += cnt
@@ -519,6 +532,7 @@ class TrafficCounterApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    app.setWindowIcon(QIcon())  # временно, иконка будет у окон
 
     # 1. Выбор направлений
     dir_dialog = DirectionSelectionDialog()
@@ -529,13 +543,13 @@ def main():
         QMessageBox.critical(None, "Ошибка", "Не выбраны въезды или выезды")
         sys.exit(1)
 
-    # 2. Выбор/редактирование типов ТС
+    # 2. Выбор активных типов ТС
     types_dialog = VehicleTypesDialog()
     if types_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
-    vehicle_types = types_dialog.get_types()
+    vehicle_types = types_dialog.get_selected_types()
     if not vehicle_types:
-        QMessageBox.critical(None, "Ошибка", "Не задано ни одного типа ТС")
+        QMessageBox.critical(None, "Ошибка", "Не выбран ни один тип ТС")
         sys.exit(1)
 
     # 3. Главное окно
