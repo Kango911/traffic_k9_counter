@@ -111,7 +111,7 @@ class DirectionSelectionDialog(QDialog):
         return entries, exits
 
 # ------------------------------------------------------------
-# Второе окно: выбор активных типов ТС (с чекбоксами)
+# Второе окно: выбор активных типов ТС (с автоматическим сохранением)
 class VehicleTypesDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -135,8 +135,8 @@ class VehicleTypesDialog(QDialog):
         self.add_btn = QPushButton("Добавить новый тип")
         self.edit_btn = QPushButton("Редактировать")
         self.del_btn = QPushButton("Удалить тип")
-        self.load_btn = QPushButton("Загрузить из JSON")
-        self.save_btn = QPushButton("Сохранить в JSON")
+        self.load_btn = QPushButton("Загрузить из JSON (ручной импорт)")
+        self.save_btn = QPushButton("Сохранить в JSON (ручной экспорт)")
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.edit_btn)
         btn_layout.addWidget(self.del_btn)
@@ -157,9 +157,12 @@ class VehicleTypesDialog(QDialog):
         self.load_btn.clicked.connect(self.load_from_json)
         self.save_btn.clicked.connect(self.save_to_json)
 
-        # Загружаем предустановленные типы
+        # Определяем путь для автосохранения (рядом с программой)
+        self.auto_save_path = os.path.join(os.path.dirname(sys.argv[0]), "vehicle_types_auto.json")
+        # Загружаем предустановленные типы, затем пытаемся загрузить автосохранённые
         self.default_types = self.get_default_types()
-        self.all_types = self.default_types[:]   # полный список
+        self.all_types = self.default_types[:]
+        self.load_auto_save()          # загружаем, если есть
         self.refresh_table()
 
     def get_default_types(self):
@@ -203,6 +206,7 @@ class VehicleTypesDialog(QDialog):
             new_type = VehicleType(name.strip(), desc, is_public)
             self.all_types.append(new_type)
             self.refresh_table()
+            self.save_auto_save()   # автосохранение
 
     def edit_type(self):
         row = self.table.currentRow()
@@ -221,6 +225,7 @@ class VehicleTypesDialog(QDialog):
             vt.description = desc
             vt.is_public = is_public
             self.refresh_table()
+            self.save_auto_save()
 
     def del_type(self):
         row = self.table.currentRow()
@@ -235,16 +240,43 @@ class VehicleTypesDialog(QDialog):
         if reply == QMessageBox.Yes:
             del self.all_types[row]
             self.refresh_table()
+            self.save_auto_save()
+
+    def save_auto_save(self):
+        """Автоматически сохраняет текущий список all_types в JSON"""
+        try:
+            data = [vt.to_dict() for vt in self.all_types]
+            with open(self.auto_save_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Ошибка автосохранения: {e}")
+
+    def load_auto_save(self):
+        """Загружает список из автосохранения, если файл существует"""
+        if os.path.exists(self.auto_save_path):
+            try:
+                with open(self.auto_save_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                loaded = [VehicleType.from_dict(d) for d in data]
+                if loaded:
+                    self.all_types = loaded
+            except Exception as e:
+                print(f"Ошибка загрузки автосохранения: {e}")
 
     def save_to_json(self):
+        """Ручной экспорт в выбранный файл"""
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить типы", "vehicle_types.json", "JSON (*.json)")
         if path:
             data = [vt.to_dict() for vt in self.all_types]
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Сохранено", f"Сохранено {len(self.all_types)} типов")
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                QMessageBox.information(self, "Сохранено", f"Сохранено {len(self.all_types)} типов")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", str(e))
 
     def load_from_json(self):
+        """Ручной импорт из выбранного файла (заменяет текущий список)"""
         path, _ = QFileDialog.getOpenFileName(self, "Загрузить типы", "", "JSON (*.json)")
         if path:
             try:
@@ -252,23 +284,28 @@ class VehicleTypesDialog(QDialog):
                     data = json.load(f)
                 self.all_types = [VehicleType.from_dict(d) for d in data]
                 self.refresh_table()
+                self.save_auto_save()   # после импорта тоже автосохраняем
                 QMessageBox.information(self, "Загружено", f"Загружено {len(self.all_types)} типов")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", str(e))
 
     def get_selected_types(self):
-        """Возвращает список типов, у которых включен первый чекбокс"""
+        """Возвращает список типов, у которых включен первый чекбокс, и обновляет флаги is_public"""
         selected = []
         for i in range(self.table.rowCount()):
             chk = self.table.cellWidget(i, 0)
             if chk and chk.isChecked():
                 vt = self.all_types[i]
-                # Обновляем флаг общественного из чекбокса в колонке 3
                 pub_chk = self.table.cellWidget(i, 3)
                 if pub_chk:
                     vt.is_public = pub_chk.isChecked()
                 selected.append(vt)
         return selected
+
+    def accept(self):
+        # Перед закрытием сохраняем текущее состояние (включая чекбоксы)
+        self.save_auto_save()
+        super().accept()
 
 # ------------------------------------------------------------
 # Третье окно: главный счётчик
@@ -543,7 +580,7 @@ def main():
         QMessageBox.critical(None, "Ошибка", "Не выбраны въезды или выезды")
         sys.exit(1)
 
-    # 2. Выбор активных типов ТС
+    # 2. Выбор активных типов ТС (с автосохранением)
     types_dialog = VehicleTypesDialog()
     if types_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
