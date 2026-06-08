@@ -1,0 +1,52 @@
+[
+  {
+    "name": "car",
+    "description": "Легковые автомобили",
+    "is_public": false
+  },
+  {
+    "name": "mini_bus",
+    "description": "Микроавтобусы (газель, скорая)",
+    "is_public": true
+  },
+  {
+    "name": "middle_bus",
+    "description": "Средние автобусы (ПАЗ)",
+    "is_public": true
+  },
+  {
+    "name": "bus",
+    "description": "Большие автобусы (ЛиАЗ)",
+    "is_public": true
+  },
+  {
+    "name": "mini_truck",
+    "description": "Малые грузовики (до 2 т)",
+    "is_public": false
+  },
+  {
+    "name": "middle_truck",
+    "description": "Средние грузовики (2-6 т)",
+    "is_public": false
+  },
+  {
+    "name": "truck",
+    "description": "Тяжёлые грузовики (>6 т)",
+    "is_public": false
+  },
+  {
+    "name": "road_train",
+    "description": "Автопоезда",
+    "is_public": false
+  },
+  {
+    "name": "trol",
+    "description": "Троллейбусы",
+    "is_public": true
+  },
+  {
+    "name": "tram",
+    "description": "Трамваи",
+    "is_public": true
+  }
+]
